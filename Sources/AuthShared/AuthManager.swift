@@ -1,6 +1,7 @@
 import Foundation
 import Supabase
 import AuthenticationServices
+import UIKit
 
 /// 全サービス共通の認証マネージャー
 /// Supabase認証 + Google/Apple OAuth + shared_profiles連携
