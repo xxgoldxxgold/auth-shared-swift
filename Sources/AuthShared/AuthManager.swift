@@ -11,6 +11,7 @@ public class AuthManager: NSObject, ObservableObject {
     @Published public var displayName: String = ""
     @Published public var avatarUrl: String = ""
     @Published public var isLoading: Bool = true
+    @Published public var lastOAuthError: Error?
 
     private let supabase: SupabaseClient
     private let config: AuthConfig
@@ -80,34 +81,71 @@ public class AuthManager: NSObject, ObservableObject {
     // MARK: - OAuth
 
     public func signInWithGoogle() async throws {
+        lastOAuthError = nil
+        let errorBox = ErrorBox()
         try await supabase.auth.signInWithOAuth(provider: .google) { [weak self] url in
             guard let self else { return }
-            await self.openAuthURL(url)
+            do {
+                try await self.openAuthURL(url)
+            } catch {
+                print("[auth-shared] OAuth error (google): \(error.localizedDescription)")
+                await errorBox.set(error)
+            }
+        }
+        if let captured = await errorBox.value {
+            lastOAuthError = captured
+            throw captured
         }
     }
 
     public func signInWithApple() async throws {
+        lastOAuthError = nil
+        let errorBox = ErrorBox()
         try await supabase.auth.signInWithOAuth(provider: .apple) { [weak self] url in
             guard let self else { return }
-            await self.openAuthURL(url)
+            do {
+                try await self.openAuthURL(url)
+            } catch {
+                print("[auth-shared] OAuth error (apple): \(error.localizedDescription)")
+                await errorBox.set(error)
+            }
+        }
+        if let captured = await errorBox.value {
+            lastOAuthError = captured
+            throw captured
         }
     }
 
-    private func openAuthURL(_ url: URL) async {
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+    private func openAuthURL(_ url: URL) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             let session = ASWebAuthenticationSession(
                 url: url,
                 callbackURLScheme: config.callbackURLScheme
-            ) { [weak self] callbackURL, _ in
+            ) { [weak self] callbackURL, error in
                 Task { @MainActor in
-                    if let callbackURL {
-                        do {
-                            try await self?.supabase.auth.session(from: callbackURL)
-                        } catch {
-                            // セッション確立失敗は無視 (呼び出し元の observer で検知)
+                    if let error {
+                        if let asError = error as? ASWebAuthenticationSessionError,
+                           asError.code == .canceledLogin {
+                            continuation.resume()
+                            return
                         }
+                        print("[auth-shared] ASWebAuthenticationSession error: \(error.localizedDescription)")
+                        continuation.resume(throwing: error)
+                        return
                     }
-                    continuation.resume()
+                    guard let callbackURL else {
+                        let err = AuthSharedError.missingCallbackURL
+                        print("[auth-shared] ASWebAuthenticationSession returned no callback URL")
+                        continuation.resume(throwing: err)
+                        return
+                    }
+                    do {
+                        try await self?.supabase.auth.session(from: callbackURL)
+                        continuation.resume()
+                    } catch {
+                        print("[auth-shared] supabase.auth.session(from:) failed: \(error.localizedDescription)")
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
             session.presentationContextProvider = self
@@ -130,7 +168,6 @@ public class AuthManager: NSObject, ObservableObject {
 
 extension AuthManager: ASWebAuthenticationPresentationContextProviding {
     public nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        // 最前面の key window を返す
         let scenes = UIApplication.shared.connectedScenes
         let windowScene = scenes
             .compactMap { $0 as? UIWindowScene }
@@ -138,4 +175,22 @@ extension AuthManager: ASWebAuthenticationPresentationContextProviding {
             ?? scenes.compactMap { $0 as? UIWindowScene }.first
         return windowScene?.keyWindow ?? ASPresentationAnchor()
     }
+}
+
+// MARK: - Supporting types
+
+public enum AuthSharedError: Error, LocalizedError {
+    case missingCallbackURL
+
+    public var errorDescription: String? {
+        switch self {
+        case .missingCallbackURL:
+            return "OAuth finished without a callback URL"
+        }
+    }
+}
+
+private actor ErrorBox {
+    private(set) var value: Error?
+    func set(_ error: Error) { value = error }
 }
