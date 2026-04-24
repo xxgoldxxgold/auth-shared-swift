@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## v2.1.0 — deleteAccount (アプリ個別 opt-out) 追加
+
+非破壊変更:
+
+- `AuthConfig` に `signupSource` / `deleteUserFunctionName` (両方 optional) を追加
+- `AuthManager.deleteAccount()` を新設。Edge Function 名は `deleteUserFunctionName` を優先、無ければ `delete-{signupSource}-user`
+- 成功時は自動 signOut、失敗時は throw
+- `AuthSharedError` に `.deleteAccountNotConfigured` / `.notAuthenticated` を追加
+
+既存 API の breaking change なし。v2.0.x から upgrade する consumer は `AuthConfig(callbackURLScheme:)` のまま変更不要。
+
+モノレポ `xxgoldxxgold/auth-shared` v2.1.0 と同時タグ。
+
 ## v2.0.0 — モノレポ構造化に合わせた同時リリース
 
 破壊的変更:

@@ -162,6 +162,27 @@ public class AuthManager: NSObject, ObservableObject {
         displayName = ""
         avatarUrl = ""
     }
+
+    // MARK: - Delete Account (per-app opt-out)
+
+    /// このアプリだけの退会。対応する Edge Function を呼んだ後に signOut する。
+    /// `AuthConfig.deleteUserFunctionName` 指定があれば優先、無ければ `delete-{signupSource}-user`。
+    /// 失敗時は throw (signOut しない)。auth.users は触らない。
+    public func deleteAccount() async throws {
+        let fnName: String
+        if let explicit = config.deleteUserFunctionName {
+            fnName = explicit
+        } else if let source = config.signupSource {
+            fnName = "delete-\(source)-user"
+        } else {
+            throw AuthSharedError.deleteAccountNotConfigured
+        }
+        guard (try? await supabase.auth.session) != nil else {
+            throw AuthSharedError.notAuthenticated
+        }
+        try await supabase.functions.invoke(fnName)
+        try await signOut()
+    }
 }
 
 // MARK: - ASWebAuthenticationPresentationContextProviding
@@ -181,11 +202,17 @@ extension AuthManager: ASWebAuthenticationPresentationContextProviding {
 
 public enum AuthSharedError: Error, LocalizedError {
     case missingCallbackURL
+    case deleteAccountNotConfigured
+    case notAuthenticated
 
     public var errorDescription: String? {
         switch self {
         case .missingCallbackURL:
             return "OAuth finished without a callback URL"
+        case .deleteAccountNotConfigured:
+            return "deleteAccount requires AuthConfig.signupSource or AuthConfig.deleteUserFunctionName"
+        case .notAuthenticated:
+            return "deleteAccount requires an active session"
         }
     }
 }
